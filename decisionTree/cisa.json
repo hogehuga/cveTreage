@@ -1,0 +1,100 @@
+{
+    "exploitation": {
+        "none": {
+            "automatable": {
+                "no": {
+                    "technical_impact": {
+                        "partial": {
+                            "low": "Track",
+                            "medium": "Track",
+                            "high": "Track"
+                        },
+                        "total": {
+                            "low": "Track",
+                            "medium": "Track",
+                            "high": "Track*"
+                        }
+                    }
+                },
+                "yes": {
+                    "technical_impact": {
+                        "partial": {
+                            "low": "Track",
+                            "medium": "Track",
+                            "high": "Attend"
+                        },
+                        "total": {
+                            "low": "Track",
+                            "medium": "Track",
+                            "high": "Attend"
+                        }
+                    }
+                }
+            }
+        },
+        "poc": {
+            "automatable": {
+                "no": {
+                    "technical_impact": {
+                        "partial": {
+                            "low": "Track",
+                            "medium": "Track",
+                            "high": "Track*"
+                        },
+                        "total": {
+                            "low": "Track",
+                            "medium": "Track*",
+                            "high": "Attend"
+                        }
+                    }
+                },
+                "yes": {
+                    "technical_impact": {
+                        "partial": {
+                            "low": "Track",
+                            "medium": "Track",
+                            "high": "Attend"
+                        },
+                        "total": {
+                            "low": "Track",
+                            "medium": "Track*",
+                            "high": "Attend"
+                        }
+                    }
+                }
+            }
+        },
+        "active": {
+            "automatable": {
+                "no": {
+                    "technical_impact": {
+                        "partial": {
+                            "low": "Track",
+                            "medium": "Track",
+                            "high": "Attend"
+                        },
+                        "total": {
+                            "low": "Track",
+                            "medium": "Attend",
+                            "high": "Act"
+                        }
+                    }
+                },
+                "yes": {
+                    "technical_impact": {
+                        "partial": {
+                            "low": "Attend",
+                            "medium": "Attend",
+                            "high": "Act"
+                        },
+                        "total": {
+                            "low": "Attend",
+                            "medium": "Act",
+                            "high": "Act"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
