@@ -83,7 +83,7 @@ $
 
 # Future
 
-![](./README-images/image.png)
+![](./images/image.png)
 
 
 # LICENSE
