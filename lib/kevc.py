@@ -1,121 +1,155 @@
-import requests
+#!/usr/bin/env python3
 import json
-import os
+import argparse
+import requests
 import urllib3
+import re
+import sys
 
-class KEVCatalogFetchException(Exception):
-    """Exception raised when KEV Catalog data cannot be fetched."""
+CVE_PATTERN = re.compile(r'^CVE-\d{4}-\d+$')
+KEV_CATALOG_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+
+class InvalidCVEFileException(Exception):
     pass
 
-# Fetch KEV Catalog data
-def fetch_kevc_data(no_check_certificate=False):
-    url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+class CVEDataFetchException(Exception):
+    pass
+
+def fetch_kev_catalog(verify_ssl):
     try:
-        if no_check_certificate:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        response = requests.get(url, verify=not no_check_certificate)
+        response = requests.get(KEV_CATALOG_URL, verify=verify_ssl)
         response.raise_for_status()
         return response.json()
-    except requests.exceptions.SSLError:
-        if not no_check_certificate:
-            print("SSL certificate verification failed. Please try again with the --no-check-certificate option.")
-        raise KEVCatalogFetchException("Failed to fetch KEV Catalog data due to SSL certificate verification error.")
+    except requests.exceptions.SSLError as e:
+        raise CVEDataFetchException("SSL Certificate error. Use --no-check-certificate option.") from e
     except requests.exceptions.RequestException as e:
-        raise KEVCatalogFetchException(f"Failed to fetch KEV Catalog data: {e}")
+        raise CVEDataFetchException("Failed to fetch KEV catalog.") from e
 
-# Load KEV Catalog data from file
-def load_kevc_data(file_path):
+def read_cve_file(file_path):
+    cve_ids = []
     with open(file_path, 'r') as file:
-        return json.load(file)
+        for idx, line in enumerate(file, start=1):
+            cve_id = line.strip()
+            if not CVE_PATTERN.match(cve_id):
+                raise InvalidCVEFileException(f"Invalid CVE format at line {idx}: {cve_id}")
+            cve_ids.append(cve_id)
+    if not cve_ids:
+        raise InvalidCVEFileException("CVE file is empty.")
+    return cve_ids
 
-# Check if CVE-ID is in KEV Catalog
-def check_kevc(cve_id, kevc_data):
-    for item in kevc_data['vulnerabilities']:
-        if item['cveID'] == cve_id:
+def get_cve_info(cve_id, kev_data):
+    for item in kev_data.get('vulnerabilities', []):
+        if item.get('cveID') == cve_id:
             return {
-                "cveID": item['cveID'],
-                "exist": "yes",
-                "dateAdded": item['dateAdded'],
-                "dueDate": item['dueDate'],
-                "knownRansomwareCampaignUse": item.get('knownRansomwareCampaignUse', 'N/A')
+                'CVE-ID': cve_id,
+                'Exsist': 'yes',
+                'DateAdded': item.get('dateAdded', ''),
+                'RansomUse': item.get('knownRansomwareCampaignUse', ''),
+                'Vendor': item.get('vendorProject', ''),
+                'Product': item.get('product', ''),
+                'CWEs': ', '.join(item.get('cwes', [])),
+                'Vulnerability Name': item.get('vulnerabilityName', ''),
             }
     return {
-        "cveID": cve_id,
-        "exist": "no",
-        "dateAdded": "N/A",
-        "dueDate": "N/A",
-        "knownRansomwareCampaignUse": "N/A"
+        'CVE-ID': cve_id,
+        'Exsist': 'no',
+        'DateAdded': '',
+        'RansomUse': '',
+        'Vendor': '',
+        'Product': '',
+        'CWEs': '',
+        'Vulnerability Name': '',
     }
 
-# Main function for standalone execution
+def format_output(data, output_format, verbose):
+    if verbose:
+        fields = ['CVE-ID', 'Exsist', 'DateAdded', 'RansomUse', 'Vendor', 'Product', 'CWEs', 'Vulnerability Name']
+        col_widths = [16, 6, 10, 9, max(len(item['Vendor']) for item in data), max(len(item['Product']) for item in data), 9, 55]
+    else:
+        fields = ['CVE-ID', 'Exsist', 'DateAdded', 'RansomUse', 'Vendor', 'Product']
+        col_widths = [16, 6, 10, 9, max(len(item['Vendor']) for item in data), max(len(item['Product']) for item in data)]
+
+    if output_format == 'csv':
+        return "\n".join(",".join(item[field] for field in fields) for item in data)
+    elif output_format == 'tsv':
+        return "\n".join("\t".join(item[field] for field in fields) for item in data)
+    elif output_format == 'table':
+        header = "|".join(f"{field:<{col_widths[idx]}}" for idx, field in enumerate(fields))
+        separator = "+".join("-" * width for width in col_widths)
+        underlined_header = "+".join("=" * width for width in col_widths)
+
+        rows = "\n".join("|" + "|".join(f"{item[field]:<{col_widths[idx]}}" for idx, field in enumerate(fields)) + "|"
+                         for item in data)
+        return f"+{separator}+\n|{header}|\n+{underlined_header}+\n{rows}\n+{separator}+"
+
 def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="Check if CVE-ID is in KEV Catalog")
-    parser.add_argument('-id', '--cve_id', help="Specify CVE ID as a comma-separated list")
-    parser.add_argument('-f', '--file', help="Specify a file containing CVE IDs")
-    parser.add_argument('-L', '--lock', action='store_true', help="Use previously downloaded KEV Catalog data")
-    parser.add_argument('-U', '--update', action='store_true', help="Update KEV Catalog data")
-    parser.add_argument('-o', '--output', default="table", help="Specify the output format (table/csv/tsv)")
-    parser.add_argument('--no-check-certificate', action='store_true', help="Disable SSL certificate verification")
+    parser = argparse.ArgumentParser(
+        description="Fetch data from CISA's Known Exploited Vulnerability Catalog.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog="""Example usage:
+Normal use (SSL verification, single CVE):
+$ ./kevc.py -id CVE-2023-12345
+
+In an environment where certificate verification fails due to an internal proxy, etc.:
+$ ./kevc.py -id CVE-2023-12345 --no-check-certificate
+
+Specify multiple CVE-IDs in a file:
+$ ./kevc.py -f cve_list.txt
+(Each line of the file contains one CVE-ID)
+
+Display details with the -v option:
+$ ./kevc.py -id CVE-2023-12345 -v
+
+Specify the output format:
+$ ./kevc.py -id CVE-2023-12345 -o tsv
+$ ./kevc.py -id CVE-2023-12345 -o table
+
+When importing:
+import kevc
+
+# Disable SSL certificate validation and get more information
+cve_id = "CVE-2023-12345"
+kev_data = kevc.fetch_kev_catalog(verify_ssl=False)
+cve_info = kevc.get_cve_info(cve_id, kev_data)
+print(cve_info)
+
+# Read CVE-IDs from a file and process each ID
+cve_ids = kevc.read_cve_file("path/to/cve_list.txt")
+kev_data = kevc.fetch_kev_catalog(verify_ssl=False)
+for cve_id in cve_ids:
+    cve_info = kevc.get_cve_info(cve_id, kev_data)
+    print(cve_info)
+"""
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('-id', '--cve_id', help="Specify a single CVE ID.")
+    group.add_argument('-f', '--file', help="Specify a file containing CVE IDs, one per line.")
+
+    parser.add_argument('--no-check-certificate', action='store_true', help="Disable SSL certificate verification.")
+    parser.add_argument('-v', '--verbose', action='store_true', help="Display detailed information.")
+    parser.add_argument('-o', '--out', choices=['csv', 'tsv', 'table'], default='csv', help="Output format.")
+
     args = parser.parse_args()
 
-    if not args.cve_id and not args.file and not args.update:
-        parser.print_help()
-        return
+    verify_ssl = not args.no_check_certificate
+    if not verify_ssl:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    if args.update:
-        try:
-            kevc_data = fetch_kevc_data(args.no_check_certificate)
-            with open("known_exploited_vulnerabilities.json", 'w') as file:
-                json.dump(kevc_data, file)
-            print("KEV Catalog data updated successfully.")
-        except KEVCatalogFetchException as e:
-            print(e)
-        return
-
-    cve_ids = []
-    if args.cve_id:
-        cve_ids = args.cve_id.split(',')
-    elif args.file:
-        with open(args.file, 'r') as file:
-            cve_ids = [line.strip() for line in file]
-
-    kevc_data = None
-    if args.lock:
-        if os.path.exists("known_exploited_vulnerabilities.json"):
-            kevc_data = load_kevc_data("known_exploited_vulnerabilities.json")
+    try:
+        if args.cve_id:
+            cve_ids = [args.cve_id]
         else:
-            print("Error: KEV Catalog data not found. Please download the data first.")
-            return
-    else:
-        try:
-            kevc_data = fetch_kevc_data(args.no_check_certificate)
-            with open("known_exploited_vulnerabilities.json", 'w') as file:
-                json.dump(kevc_data, file)
-        except KEVCatalogFetchException as e:
-            print(e)
-            return
+            cve_ids = read_cve_file(args.file)
 
-    results = []
-    for cve_id in cve_ids:
-        result = check_kevc(cve_id, kevc_data)
-        results.append(result)
+        kev_data = fetch_kev_catalog(verify_ssl)
+        results = [get_cve_info(cve_id, kev_data) for cve_id in cve_ids]
 
-    if args.output == "csv":
-        output = "cveID,exist,dateAdded,dueDate,knownRansomwareCampaignUse\n"
-        for result in results:
-            output += f"{result['cveID']},{result['exist']},{result['dateAdded']},{result['dueDate']},{result['knownRansomwareCampaignUse']}\n"
-    elif args.output == "tsv":
-        output = "cveID\texist\tdateAdded\tdueDate\tknownRansomwareCampaignUse\n"
-        for result in results:
-            output += f"{result['cveID']}\t{result['exist']}\t{result['dateAdded']}\t{result['dueDate']}\t{result['knownRansomwareCampaignUse']}\n"
-    else:
-        output = "|cveID         |exist|dateAdded   |dueDate     |knownRansomwareCampaignUse|\n"
-        output += "|--------------|-----|------------|------------|--------------------------|\n"
-        for result in results:
-            output += f"|{result['cveID']:<14}|{result['exist']:<5}|{result['dateAdded']:<12}|{result['dueDate']:<12}|{result['knownRansomwareCampaignUse']:<26}|\n"
+        output = format_output(results, args.out, args.verbose)
+        print(output)
 
-    print(output)
+    except (InvalidCVEFileException, CVEDataFetchException) as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
